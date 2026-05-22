@@ -33,18 +33,3 @@ open aaf_voice_masking_demo.html
 ```
 
 ---
-
-## 🧪 Usage Instructions
-
-### Offline Conversion
-1. Connect your headphones.
-2. Click **Record Whisper** and whisper a short phrase (up to 15s). Click **Stop Recording**.
-3. Under **Reference Target Voice**, choose a built-in speaker profile or upload your own custom `.wav` target clip.
-4. Click **✧ Synthesize Voiced Speech ✧**.
-5. Once synthesized, click **Play via Headphones (Wet)** to route the converted voice through the live DSP slider chain!
-
-### Live Neural Stream
-1. Connect your headphones (essential to avoid feedback howling!).
-2. In the **Live Neural Stream** panel, click **✧ Go Live (Start Stream) ✧**.
-3. Speak whispers directly into your microphone. Converted voiced speech will play back instantly.
-4. Adjust the **Pitch Shift**, **Formant Shift (VTL)**, or **Reverb** sliders on the dashboard in real time!
