@@ -1,43 +1,5 @@
-# ✧ Hearing Yourself: Zero-Shot Whisper-to-Voiced Speech Converter
+# ✧ Are you hearing yourself? Zero-Shot Whisper-to-Voiced Speech Converter
 
-An entirely local, real-time **Zero-Shot Whisper-to-Voiced Speech Conversion** dashboard. This application allows users to speak whispered speech into a microphone, convert it on-the-fly into rich, unwhispered voiced speech using local neural pipelines, and route the synthesized speech wet-mixed through an active Web Audio DSP headphone chain (pitch shifting, formant scaling, and space reverb).
-
----
-
-## ✨ Features
-
-- **⚡ Real-Time Live Neural Stream**: Continuous bi-directional streaming via WebSockets with latency under 250ms.
-- **🎙️ Zero-Shot Voice Cloning**: Clones the timbre and characteristics of any target speaker voice from a short reference WAV clip.
-- **🎧 Web Audio DSP Wet-Routing**: Directly routes the voice-converted stream through active pitch, formant (VTL), and reverb nodes in the browser.
-- **🎨 Glassmorphic Canvas Visualizers**: Dynamic real-time RMS input/output DB meters and interactive frequency spectrum plots.
-- **🧠 Local Accelerated Inference**: Native support for Apple Silicon MPS (Metal Performance Shaders) for sub-second, local inference.
-- **🔒 Acoustic Feedback Protection**: Programmatically bypasses direct mic-to-headphone loops during live streaming.
-
----
-
-## 🛠️ System Architecture
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Mic as Mic Input (Native Rate)
-    participant Resampler as JS Linear Resampler (16kHz)
-    participant WS as WebSocket Client
-    participant Server as FastAPI server.py
-    participant Model as MeanVC (Apple Silicon MPS)
-    participant Scheduler as AudioContext Buffer Scheduler
-
-    Mic->>Resampler: 4096-sample raw chunks (44.1/48kHz)
-    Note over Resampler: Accumulates raw samples
-    Resampler->>WS: Sends exactly 3200-sample float32 chunk (200ms)
-    WS->>Server: ws://127.0.0.1:8000/ws/stream
-    Server->>Model: Run chunk inference
-    Model->>Server: Returns converted float32 samples
-    Server->>WS: Sends binary float32 back
-    WS->>Scheduler: Receive converted PCM
-    Scheduler->>Scheduler: Auto-upsamples 16kHz to hardware rate
-    Scheduler->>Scheduler: Plays back through voiceGain node
-```
 
 ---
 
