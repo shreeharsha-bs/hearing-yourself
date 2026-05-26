@@ -1548,6 +1548,8 @@ let liveAccumBuffer = [];
 let liveNextPlayTime = 0;
 let liveActiveSources = [];
 let liveTimeQueue = [];
+let liveGateOpen = false;
+let liveGateSilenceCount = 0;
 
 // DOM references for MeanVC
 const meanvcBadge = document.getElementById('meanvcBadge');
@@ -2149,18 +2151,40 @@ function processAccumulatedAudio() {
     // Apply live boost and noise gate if enabled
     const chkBoostQuality = document.getElementById('chkBoostQuality');
     if (chkBoostQuality && chkBoostQuality.checked) {
-      // 1. Measure peak absolute amplitude of this chunk
-      let peak = 0;
+      // 1. Calculate RMS energy of this chunk
+      let sum = 0;
       for (let i = 0; i < resampled.length; i++) {
-        const val = Math.abs(resampled[i]);
-        if (val > peak) peak = val;
+        sum += resampled[i] * resampled[i];
+      }
+      const rms = Math.sqrt(sum / resampled.length);
+      
+      // 2. Advanced Hysteresis Noise Gate (RMS thresholds: open = 0.008, close = 0.005)
+      const openThreshold = 0.008;
+      const closeThreshold = 0.005;
+      
+      if (!liveGateOpen) {
+        if (rms > openThreshold) {
+          liveGateOpen = true;
+          liveGateSilenceCount = 0;
+          console.log(`Live Gate OPEN (RMS: ${rms.toFixed(5)})`);
+        }
+      } else {
+        if (rms < closeThreshold) {
+          liveGateSilenceCount++;
+          if (liveGateSilenceCount >= 2) { // must be quiet for 2 chunks (400ms) to close
+            liveGateOpen = false;
+            console.log(`Live Gate CLOSED (RMS: ${rms.toFixed(5)})`);
+          }
+        } else {
+          liveGateSilenceCount = 0;
+        }
       }
       
-      // 2. Apply Noise Gate (0.005 threshold)
-      if (peak < 0.005) {
-        resampled.fill(0); // Zero out silence/hums
+      // 3. Apply action based on gate state
+      if (!liveGateOpen) {
+        resampled.fill(0); // Zero out room noise/hums completely
       } else {
-        // 3. Apply digital Pre-Gain (4.0x multiplier with hard clipping safety)
+        // 4. Apply digital Pre-Gain (4.0x multiplier with hard clipping safety)
         for (let i = 0; i < resampled.length; i++) {
           resampled[i] = Math.max(-1.0, Math.min(1.0, resampled[i] * 4.0));
         }
@@ -2268,6 +2292,8 @@ async function startLiveStream() {
       liveAccumBuffer = [];
       liveActiveSources = [];
       liveTimeQueue = [];
+      liveGateOpen = false;
+      liveGateSilenceCount = 0;
       
       // Disconnect direct audio path to prevent hearing raw whispers
       if (spectralNode && spectralNode.node && voiceGain) {
