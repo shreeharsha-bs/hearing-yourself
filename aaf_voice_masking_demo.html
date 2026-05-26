@@ -661,10 +661,18 @@
     </div>
 
     <!-- Parameter Controls -->
-    <div class="ctrl-row" style="margin-top:4px;margin-bottom:12px;">
+    <div class="ctrl-row" style="margin-top:4px;margin-bottom:8px;">
       <span class="ctrl-label" style="color:#c9affe;">Diffusion Steps</span>
       <input type="range" id="sSteps" min="1" max="10" step="1" value="2" style="accent-color:#6e40c9;">
       <span class="ctrl-val" id="vSteps" style="color:#c9affe;">2 steps</span>
+    </div>
+
+    <!-- Whisper Quality Booster Toggle -->
+    <div style="display:flex;align-items:center;margin-top:-2px;margin-bottom:12px;gap:8px;font-size:12px;color:#c9affe;border-top:1px dashed rgba(110,64,201,0.2);padding-top:8px;">
+      <input type="checkbox" id="chkBoostQuality" checked style="accent-color:#6e40c9;cursor:pointer;margin:0;">
+      <label for="chkBoostQuality" style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;font-weight:500;">
+        🚀 Boost Whisper Quality <span style="font-size:9.5px;color:#8b949e;font-weight:normal;">(Pre-Gain & Noise Gate)</span>
+      </label>
     </div>
 
     <button class="btn-synthesize" id="btnSynthesize" disabled>
@@ -1742,6 +1750,130 @@ async function toggleWhisperRecording() {
 
 btnRecordWhisper.addEventListener('click', toggleWhisperRecording);
 
+// ================================================================
+// Whisper Pre-processing (Normalization & WAV Exporter)
+// ================================================================
+function audioBufferToWavBlob(audioBuffer) {
+  const numOfChan = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const format = 1; // 1 = raw 16-bit PCM
+  const bitDepth = 16;
+  
+  let result;
+  if (numOfChan === 2) {
+    result = interleave(audioBuffer.getChannelData(0), audioBuffer.getChannelData(1));
+  } else {
+    result = audioBuffer.getChannelData(0);
+  }
+  
+  const buffer = new ArrayBuffer(44 + result.length * 2);
+  const view = new DataView(buffer);
+  
+  // RIFF identifier
+  writeString(view, 0, 'RIFF');
+  // file length
+  view.setUint32(4, 36 + result.length * 2, true);
+  // RIFF type
+  writeString(view, 8, 'WAVE');
+  // format chunk identifier
+  writeString(view, 12, 'fmt ');
+  // format chunk length
+  view.setUint32(16, 16, true);
+  // sample format (raw PCM)
+  view.setUint16(20, format, true);
+  // channel count
+  view.setUint16(22, numOfChan, true);
+  // sample rate
+  view.setUint32(24, sampleRate, true);
+  // byte rate (sample rate * block align)
+  view.setUint32(28, sampleRate * numOfChan * 2, true);
+  // block align (channel count * bytes per sample)
+  view.setUint16(32, numOfChan * 2, true);
+  // bits per sample
+  view.setUint16(34, bitDepth, true);
+  // data chunk identifier
+  writeString(view, 36, 'data');
+  // chunk length
+  view.setUint32(40, result.length * 2, true);
+  
+  // write PCM audio samples
+  floatTo16BitPCM(view, 44, result);
+  
+  return new Blob([buffer], { type: 'audio/wav' });
+  
+  function interleave(inputL, inputR) {
+    const length = inputL.length + inputR.length;
+    const result = new Float32Array(length);
+    let index = 0;
+    let inputIndex = 0;
+    while (index < length) {
+      result[index++] = inputL[inputIndex];
+      result[index++] = inputR[inputIndex];
+      inputIndex++;
+    }
+    return result;
+  }
+  
+  function floatTo16BitPCM(output, offset, input) {
+    for (let i = 0; i < input.length; i++, offset += 2) {
+      let s = Math.max(-1, Math.min(1, input[i]));
+      output.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+  }
+  
+  function writeString(view, offset, string) {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  }
+}
+
+async function preprocessWhisper(fileOrBlob) {
+  const arrayBuf = await fileOrBlob.arrayBuffer();
+  
+  // Temporary context to decode
+  const tempCtx = new (window.AudioContext || window.webkitAudioContext)();
+  let audioBuffer;
+  try {
+    audioBuffer = await tempCtx.decodeAudioData(arrayBuf);
+  } catch (err) {
+    console.error('Failed to decode audio for pre-processing:', err);
+    tempCtx.close();
+    return fileOrBlob;
+  }
+  tempCtx.close();
+  
+  const channelData = audioBuffer.getChannelData(0);
+  
+  // Find peak absolute amplitude
+  let maxVal = 0;
+  for (let i = 0; i < channelData.length; i++) {
+    const absVal = Math.abs(channelData[i]);
+    if (absVal > maxVal) {
+      maxVal = absVal;
+    }
+  }
+  
+  console.log(`Pre-processing whisper: raw peak amplitude is ${maxVal.toFixed(4)}`);
+  
+  if (maxVal < 1e-4) {
+    console.log('Audio is silent. Skipping normalization.');
+    return fileOrBlob;
+  }
+  
+  const scale = 0.95 / maxVal;
+  const finalScale = Math.min(scale, 10.0); // max 20dB boost
+  
+  if (finalScale !== 1.0) {
+    console.log(`Normalizing whisper with gain factor: ${finalScale.toFixed(2)}x`);
+    for (let i = 0; i < channelData.length; i++) {
+      channelData[i] *= finalScale;
+    }
+  }
+  
+  return audioBufferToWavBlob(audioBuffer);
+}
+
 // Synthesize Whisper
 btnSynthesize.addEventListener('click', async () => {
   if (!meanvcConnected) return;
@@ -1754,19 +1886,31 @@ btnSynthesize.addEventListener('click', async () => {
   // Stop existing playback
   stopSynthPlayback();
 
-  const formData = new FormData();
-  
-  // Source
+  let uploadBlob = null;
   if (whisperFile) {
-    formData.append('whisper', whisperFile);
+    uploadBlob = whisperFile;
   } else if (whisperBlob) {
-    formData.append('whisper', whisperBlob, 'whisper.wav');
+    uploadBlob = whisperBlob;
   } else {
     alert('Please record or choose a whisper WAV first.');
     btnSynthesize.disabled = false;
     synthLoading.style.display = 'none';
     return;
   }
+  
+  // Pre-process and normalize if booster is active
+  const chkBoostQuality = document.getElementById('chkBoostQuality');
+  if (chkBoostQuality && chkBoostQuality.checked) {
+    try {
+      console.log('Whisper quality booster active. Running peak normalization...');
+      uploadBlob = await preprocessWhisper(uploadBlob);
+    } catch (e) {
+      console.warn("Failed to pre-process whisper, using original:", e);
+    }
+  }
+
+  const formData = new FormData();
+  formData.append('whisper', uploadBlob, 'whisper.wav');
   
   // Target voice
   if (targetFile) {
@@ -2000,7 +2144,28 @@ function processAccumulatedAudio() {
     liveAccumBuffer = liveAccumBuffer.slice(nativeChunkSize);
     
     // Resample from native rate to exactly 3200 samples (16kHz)
-    const resampled = resampleToExactly(rawChunk, 3200);
+    let resampled = resampleToExactly(rawChunk, 3200);
+    
+    // Apply live boost and noise gate if enabled
+    const chkBoostQuality = document.getElementById('chkBoostQuality');
+    if (chkBoostQuality && chkBoostQuality.checked) {
+      // 1. Measure peak absolute amplitude of this chunk
+      let peak = 0;
+      for (let i = 0; i < resampled.length; i++) {
+        const val = Math.abs(resampled[i]);
+        if (val > peak) peak = val;
+      }
+      
+      // 2. Apply Noise Gate (0.005 threshold)
+      if (peak < 0.005) {
+        resampled.fill(0); // Zero out silence/hums
+      } else {
+        // 3. Apply digital Pre-Gain (4.0x multiplier with hard clipping safety)
+        for (let i = 0; i < resampled.length; i++) {
+          resampled[i] = Math.max(-1.0, Math.min(1.0, resampled[i] * 4.0));
+        }
+      }
+    }
     
     // Record timestamp for latency
     liveTimeQueue.push(performance.now());
